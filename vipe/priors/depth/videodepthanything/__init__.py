@@ -17,6 +17,7 @@ import numpy as np
 import torch
 
 from vipe.utils.misc import unpack_optional
+from vipe.utils.weights import weights_path
 
 from ..base import DepthEstimationInput, DepthEstimationModel, DepthEstimationResult, DepthType
 from .video_depth import VideoDepthAnything
@@ -45,10 +46,10 @@ class VideoDepthAnythingDepthModel(DepthEstimationModel):
 
         self.is_metric = False
         if model == "vits":
-            self.ckpt_url = "https://huggingface.co/depth-anything/Video-Depth-Anything-Small/resolve/main/video_depth_anything_vits.pth"
+            self.ckpt_path = weights_path("video-depth-anything", "video_depth_anything_vits.pth")
             self.use_fp32 = True
         elif model == "vitl":
-            self.ckpt_url = "https://huggingface.co/depth-anything/Video-Depth-Anything-Large/resolve/main/video_depth_anything_vitl.pth"
+            self.ckpt_path = weights_path("video-depth-anything", "video_depth_anything_vitl.pth")
             self.use_fp32 = False
         else:
             raise ValueError(f"Model {model} not supported")
@@ -57,7 +58,7 @@ class VideoDepthAnythingDepthModel(DepthEstimationModel):
 
         self.model = VideoDepthAnything(**self.model_config)
         self.model.load_state_dict(
-            torch.hub.load_state_dict_from_url(self.ckpt_url, map_location="cpu"),
+            torch.load(self.ckpt_path, map_location="cpu", weights_only=True),
             strict=True,
         )
         self.model.cuda().eval()

@@ -7,6 +7,8 @@ import os
 import torch
 import torch.nn as nn
 
+from vipe.utils.weights import weights_path
+
 from .model.dense_pipeline import BaseDepthModel
 
 
@@ -62,25 +64,32 @@ metric3d_dir = os.path.dirname(__file__)
 MODEL_TYPE = {
     "ConvNeXt-Tiny": {
         "cfg_file": f"{metric3d_dir}/model/configs/convtiny.0.3_150.py",
-        "ckpt_file": "https://huggingface.co/JUGGHM/Metric3D/resolve/main/convtiny_hourglass_v1.pth",
+        "ckpt_file": str(weights_path("metric3d", "convtiny_hourglass_v1.pth")),
     },
     "ConvNeXt-Large": {
         "cfg_file": f"{metric3d_dir}/model/configs/convlarge.0.3_150.py",
-        "ckpt_file": "https://huggingface.co/JUGGHM/Metric3D/resolve/main/convlarge_hourglass_0.3_150_step750k_v1.1.pth",
+        "ckpt_file": str(weights_path("metric3d", "convlarge_hourglass_0.3_150_step750k_v1.1.pth")),
     },
     "ViT-Small": {
         "cfg_file": f"{metric3d_dir}/model/configs/vit.raft5.small.py",
-        "ckpt_file": "https://huggingface.co/JUGGHM/Metric3D/resolve/main/metric_depth_vit_small_800k.pth",
+        "ckpt_file": str(weights_path("metric3d", "metric_depth_vit_small_800k.pth")),
     },
     "ViT-Large": {
         "cfg_file": f"{metric3d_dir}/model/configs/vit.raft5.large.py",
-        "ckpt_file": "https://huggingface.co/JUGGHM/Metric3D/resolve/main/metric_depth_vit_large_800k.pth",
+        "ckpt_file": str(weights_path("metric3d", "metric_depth_vit_large_800k.pth")),
     },
     "ViT-giant2": {
         "cfg_file": f"{metric3d_dir}/model/configs/vit.raft5.giant2.py",
-        "ckpt_file": "https://huggingface.co/JUGGHM/Metric3D/resolve/main/metric_depth_vit_giant2_800k.pth",
+        "ckpt_file": str(weights_path("metric3d", "metric_depth_vit_giant2_800k.pth")),
     },
 }
+
+
+def _load_metric3d_ckpt(ckpt_file: str) -> dict:
+    """Load a Metric3D checkpoint from a local path (new) or URL (legacy fallback)."""
+    if os.path.exists(ckpt_file):
+        return torch.load(ckpt_file, map_location="cpu", weights_only=False)
+    return torch.hub.load_state_dict_from_url(ckpt_file)
 
 
 def metric3d_convnext_tiny(pretrain=False, **kwargs):
@@ -99,7 +108,7 @@ def metric3d_convnext_tiny(pretrain=False, **kwargs):
     model = get_configured_monodepth_model(cfg)
     if pretrain:
         model.load_state_dict(
-            torch.hub.load_state_dict_from_url(ckpt_file)["model_state_dict"],
+            _load_metric3d_ckpt(ckpt_file)["model_state_dict"],
             strict=False,
         )
     return model
@@ -121,7 +130,7 @@ def metric3d_convnext_large(pretrain=False, **kwargs):
     model = get_configured_monodepth_model(cfg)
     if pretrain:
         model.load_state_dict(
-            torch.hub.load_state_dict_from_url(ckpt_file)["model_state_dict"],
+            _load_metric3d_ckpt(ckpt_file)["model_state_dict"],
             strict=False,
         )
     return model
@@ -143,7 +152,7 @@ def metric3d_vit_small(pretrain=False, **kwargs):
     model = get_configured_monodepth_model(cfg)
     if pretrain:
         model.load_state_dict(
-            torch.hub.load_state_dict_from_url(ckpt_file)["model_state_dict"],
+            _load_metric3d_ckpt(ckpt_file)["model_state_dict"],
             strict=False,
         )
     return model
@@ -165,7 +174,7 @@ def metric3d_vit_large(pretrain=False, **kwargs):
     model = get_configured_monodepth_model(cfg)
     if pretrain:
         model.load_state_dict(
-            torch.hub.load_state_dict_from_url(ckpt_file)["model_state_dict"],
+            _load_metric3d_ckpt(ckpt_file)["model_state_dict"],
             strict=False,
         )
     return model
@@ -187,7 +196,7 @@ def metric3d_vit_giant2(pretrain=False, **kwargs):
     model = get_configured_monodepth_model(cfg)
     if pretrain:
         model.load_state_dict(
-            torch.hub.load_state_dict_from_url(ckpt_file)["model_state_dict"],
+            _load_metric3d_ckpt(ckpt_file)["model_state_dict"],
             strict=False,
         )
     return model

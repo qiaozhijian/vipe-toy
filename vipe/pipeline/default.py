@@ -21,7 +21,7 @@ from pathlib import Path
 
 import torch
 
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from vipe.slam.system import SLAMOutput, SLAMSystem
 from vipe.streams.base import (
@@ -71,11 +71,13 @@ class DefaultAnnotationPipeline(Pipeline):
 
         init_processors.append(GeoCalibIntrinsicsProcessor(video_stream, camera_type=self.camera_type))
         if self.init_cfg.instance is not None:
+            sam_mt = OmegaConf.select(self.init_cfg.instance, "sam_model_type", default="vit_b")
             init_processors.append(
                 TrackAnythingProcessor(
                     self.init_cfg.instance.phrases,
                     add_sky=self.init_cfg.instance.add_sky,
                     sam_run_gap=int(video_stream.fps() * self.init_cfg.instance.kf_gap_sec),
+                    sam_model_type=sam_mt,
                 )
             )
         return ProcessedVideoStream(video_stream, init_processors)

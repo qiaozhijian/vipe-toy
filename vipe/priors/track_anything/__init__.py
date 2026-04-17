@@ -2,14 +2,12 @@
 # https://github.com/z-x-yang/Segment-and-Track-Anything
 # Licensed under the AGPL-3.0 License. See THIRD_PARTY_LICENSES.md for details.
 
-from pathlib import Path
-
-import gdown
 import numpy as np
 import torch
 
 from vipe.streams.base import VideoFrame
 
+from .checkpoints import SamBackbone, ensure_deaot_checkpoint, ensure_sam_checkpoint
 from .seg_tracker import SegTracker
 
 
@@ -19,24 +17,10 @@ class TrackAnythingPipeline:
         mask_phrases: list[str],
         sam_points_per_side: int = 30,
         sam_run_gap: int = 10,
+        sam_model_type: SamBackbone = "vit_b",
     ) -> None:
-        # Prepare checkpoints.
-        sam_ckpt_path = Path(torch.hub.get_dir()) / "sam" / "sam_vit_b_01ec64.pth"
-        if not sam_ckpt_path.exists():
-            sam_ckpt_path.parent.mkdir(parents=True, exist_ok=True)
-            torch.hub.download_url_to_file(
-                "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
-                dst=str(sam_ckpt_path),
-            )
-
-        aot_ckpt_path = Path(torch.hub.get_dir()) / "aot" / "R50_DeAOTL_PRE_YTB_DAV.pth"
-        if not aot_ckpt_path.exists():
-            aot_ckpt_path.parent.mkdir(parents=True, exist_ok=True)
-            gdown.download(
-                "https://drive.google.com/file/d/1QoChMkTVxdYZ_eBlZhK2acq9KMQZccPJ/view",
-                output=str(aot_ckpt_path),
-                fuzzy=True,
-            )
+        sam_ckpt_path = ensure_sam_checkpoint(sam_model_type)
+        aot_ckpt_path = ensure_deaot_checkpoint()
 
         self.threshold_args = {
             "box_threshold": 0.35,
@@ -56,7 +40,7 @@ class TrackAnythingPipeline:
             },
             sam_args={
                 "sam_checkpoint": str(sam_ckpt_path),
-                "model_type": "vit_b",
+                "model_type": sam_model_type,
                 "generator_args": {
                     "points_per_side": sam_points_per_side,
                     "pred_iou_thresh": 0.8,

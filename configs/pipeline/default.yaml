@@ -8,6 +8,7 @@ init:
   camera_type: "pinhole"
   intrinsics: "geocalib"
   instance:
+    sam_model_type: vit_b   # vit_b | vit_l | vit_h (SAM backbone; checkpoints auto-download)
     kf_gap_sec: 2.0
     phrases: 
       - person

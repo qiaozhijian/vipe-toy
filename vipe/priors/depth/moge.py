@@ -15,16 +15,18 @@
 
 import torch
 
-
-try:
-    from moge.model.v1 import MoGeModel
-except ModuleNotFoundError:
-    MoGeModel = None
-
-from vipe.utils.misc import unpack_optional
 from vipe.utils.cameras import CameraType
+from vipe.utils.misc import unpack_optional
+from vipe.utils.weights import weights_path
 
 from .base import DepthEstimationInput, DepthEstimationModel, DepthEstimationResult, DepthType
+
+
+# Repo and module paths per MoGe version.
+_MOGE_VARIANTS = {
+    1: {"module": "moge.model.v1", "local_dir": "moge-vitl"},
+    2: {"module": "moge.model.v2", "local_dir": "moge-2-vitl"},
+}
 
 
 def focal_length_to_fov_degrees(focal_length: float, image_width: float) -> float:
@@ -35,19 +37,47 @@ def focal_length_to_fov_degrees(focal_length: float, image_width: float) -> floa
 
 
 class MogeModel(DepthEstimationModel):
-    """https://github.com/microsoft/MoGe"""
+    """
+    MoGe depth estimator. https://github.com/microsoft/MoGe
 
-    def __init__(self) -> None:
+    Args:
+        version: 1 for MoGe-1 (`moge.model.v1`, affine-invariant), 2 for MoGe-2
+                 (`moge.model.v2`, metric scale, sharper details, faster).
+                 Default: 2.
+    """
+
+    def __init__(self, version: int = 2) -> None:
         super().__init__()
-        if MoGeModel is None:
-            raise RuntimeError(
-                "moge is not found in the environment. You can install it via pip install `git+https://github.com/microsoft/MoGe.git`"
+        if version not in _MOGE_VARIANTS:
+            raise ValueError(
+                f"Unsupported MoGe version: {version}. Choose from {sorted(_MOGE_VARIANTS)}."
             )
-        self.model = MoGeModel.from_pretrained("Ruicheng/moge-vitl")
-        self.model = self.model.cuda().eval()
+        self.version = version
+        variant = _MOGE_VARIANTS[version]
+
+        try:
+            module = __import__(variant["module"], fromlist=["MoGeModel"])
+            MoGeCls = module.MoGeModel
+        except ModuleNotFoundError as e:
+            raise RuntimeError(
+                f"moge (`{variant['module']}`) is not found in the environment. "
+                "Install with: pip install git+https://github.com/microsoft/MoGe.git"
+            ) from e
+
+        # moge's from_pretrained accepts a local checkpoint file (checks Path.exists()).
+        ckpt = weights_path("moge", variant["local_dir"], "model.pt")
+        if not ckpt.is_file():
+            raise FileNotFoundError(
+                f"MoGe checkpoint missing: {ckpt}. "
+                f"Run `python scripts/eval_vipe/tools/prefetch_vipe_models.py` to download."
+            )
+        self.model = MoGeCls.from_pretrained(str(ckpt)).cuda().eval()
 
     @property
     def depth_type(self) -> DepthType:
+        # MoGe-2 is truly metric; MoGe-1 is affine-invariant but VIPE consumes it
+        # as metric via fov-conditioned scale. We keep the same type for both so
+        # downstream code is unchanged.
         return DepthType.MODEL_METRIC_DEPTH
 
     def estimate(self, src: DepthEstimationInput) -> DepthEstimationResult:
@@ -65,7 +95,6 @@ class MogeModel(DepthEstimationModel):
         w = rgb.shape[2]
         input_image_for_depth = rgb.moveaxis(-1, 1)
 
-        # MoGe inference
         moge_input_dict = {"fov_x": focal_length_to_fov_degrees(focal_length, w)}
 
         with torch.no_grad():
@@ -74,10 +103,8 @@ class MogeModel(DepthEstimationModel):
         moge_depth_hw_full = moge_output_full["depth"]
         moge_mask_hw_full = moge_output_full["mask"]
 
-        # Process depth
         moge_depth_tensor = torch.nan_to_num(moge_depth_hw_full, nan=1e4)
         moge_depth_tensor = torch.clamp(moge_depth_tensor, min=0, max=1e4)
-
         moge_depth_tensor = moge_depth_tensor * moge_mask_hw_full.float()
 
         if not batch_dim:

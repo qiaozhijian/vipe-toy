@@ -8,6 +8,8 @@ import torch
 
 from torchvision.ops import box_convert
 
+from vipe.utils.weights import weights_path
+
 from .groundingdino.config import config
 from .groundingdino.datasets import transforms as T
 from .groundingdino.models import build_model as build_grounding_dino
@@ -22,10 +24,13 @@ class Detector:
         self.deivce = device
         self.gd = build_grounding_dino(args)
 
-        checkpoint = torch.hub.load_state_dict_from_url(
-            "https://huggingface.co/ShilongLiu/GroundingDINO/resolve/main/groundingdino_swint_ogc.pth",
-            map_location="cpu",
-        )
+        ckpt_path = weights_path("grounding-dino", "groundingdino_swint_ogc.pth")
+        if not ckpt_path.is_file():
+            raise FileNotFoundError(
+                f"GroundingDINO checkpoint missing: {ckpt_path}. "
+                f"Run `python scripts/eval_vipe/tools/prefetch_vipe_models.py` to download."
+            )
+        checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
         self.gd.load_state_dict(clean_state_dict(checkpoint["model"]), strict=False)
         self.gd.eval()
 

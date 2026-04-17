@@ -18,6 +18,7 @@ import torch
 from einops import rearrange
 
 from vipe.utils.misc import unpack_optional
+from vipe.utils.weights import weights_path
 
 from ..base import DepthEstimationInput, DepthEstimationModel, DepthEstimationResult, DepthType
 from .priorda import PriorDepthAnything
@@ -30,7 +31,18 @@ class PriorDAModel(DepthEstimationModel):
 
     def __init__(self) -> None:
         super().__init__()
-        self.model = PriorDepthAnything(device="cuda")
+        ckpt_dir = weights_path("prior-depth-anything")
+        if not ckpt_dir.is_dir():
+            raise FileNotFoundError(
+                f"Prior-Depth-Anything weights missing under {ckpt_dir}. "
+                f"Run `python scripts/eval_vipe/tools/prefetch_vipe_models.py` to download."
+            )
+        self.model = PriorDepthAnything(
+            device="cuda",
+            fmde_dir=str(ckpt_dir),
+            cmde_dir=str(ckpt_dir),
+            ckpt_dir=str(ckpt_dir),
+        )
 
     @property
     def depth_type(self) -> DepthType:

@@ -17,8 +17,9 @@ from typing import Literal
 
 import torch
 
-from vipe.utils.misc import unpack_optional
 from vipe.utils.cameras import CameraType
+from vipe.utils.misc import unpack_optional
+from vipe.utils.weights import weights_path
 
 from ..base import DepthEstimationInput, DepthEstimationModel, DepthEstimationResult, DepthType
 from .models.unidepthv2.unidepthv2 import Pinhole, UniDepthV2
@@ -27,7 +28,13 @@ from .models.unidepthv2.unidepthv2 import Pinhole, UniDepthV2
 class UniDepth2Model(DepthEstimationModel):
     def __init__(self, type: Literal["s", "b", "l"] = "l") -> None:
         super().__init__()
-        self.model = UniDepthV2.from_pretrained(f"lpiccinelli/unidepth-v2-vit{type}14")
+        ckpt_dir = weights_path("unidepth", f"unidepth-v2-vit{type}14")
+        if not (ckpt_dir / "config.json").is_file():
+            raise FileNotFoundError(
+                f"UniDepthV2 weights missing under {ckpt_dir}. "
+                f"Run `python scripts/eval_vipe/tools/prefetch_vipe_models.py` to download."
+            )
+        self.model = UniDepthV2.from_pretrained(str(ckpt_dir))
         self.model.interpolation_mode = "bilinear"
         self.model = self.model.cuda().eval()
 

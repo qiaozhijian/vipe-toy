@@ -12,6 +12,8 @@ import torch.nn as nn
 
 from torch.nn.functional import interpolate
 
+from vipe.utils.weights import weights_path
+
 from .camera import BaseCamera
 from .geocalib import GeoCalib as Model
 from .utils import ImagePreprocessor, load_image
@@ -31,15 +33,15 @@ class GeoCalib(nn.Module):
         """
         super().__init__()
         if weights in {"pinhole", "distorted"}:
-            url = f"https://github.com/cvg/GeoCalib/releases/download/v1.0/geocalib-{weights}.tar"
-
-            # load checkpoint
-            model_dir = f"{torch.hub.get_dir()}/geocalib"
-            state_dict = torch.hub.load_state_dict_from_url(
-                url, model_dir, map_location="cpu", file_name=f"{weights}.tar"
-            )
+            ckpt_path = weights_path("geocalib", f"{weights}.tar")
+            if not ckpt_path.is_file():
+                raise FileNotFoundError(
+                    f"GeoCalib checkpoint missing: {ckpt_path}. "
+                    f"Run `python scripts/eval_vipe/tools/prefetch_vipe_models.py` to download."
+                )
+            state_dict = torch.load(ckpt_path, map_location="cpu", weights_only=False)
         elif Path(weights).exists():
-            state_dict = torch.load(weights, map_location="cpu")
+            state_dict = torch.load(weights, map_location="cpu", weights_only=False)
         else:
             raise ValueError(f"Invalid weights: {weights}")
 

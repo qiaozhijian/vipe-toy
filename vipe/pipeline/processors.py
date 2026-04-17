@@ -26,6 +26,7 @@ from vipe.priors.depth.priorda import PriorDAModel
 from vipe.priors.depth.videodepthanything import VideoDepthAnythingDepthModel
 from vipe.priors.geocalib import GeoCalib
 from vipe.priors.track_anything import TrackAnythingPipeline
+from vipe.priors.track_anything.checkpoints import SamBackbone
 from vipe.slam.interface import SLAMOutput
 from vipe.streams.base import (CachedVideoStream, FrameAttribute,
                                StreamProcessor, VideoFrame, VideoStream)
@@ -114,6 +115,7 @@ class TrackAnythingProcessor(StreamProcessor):
         add_sky: bool,
         sam_run_gap: int = 30,
         mask_expand: int = 5,
+        sam_model_type: SamBackbone = "vit_b",
     ) -> None:
         self.mask_phrases = mask_phrases
         self.sam_run_gap = sam_run_gap
@@ -122,7 +124,12 @@ class TrackAnythingProcessor(StreamProcessor):
         if self.add_sky:
             self.mask_phrases.append(VideoFrame.SKY_PROMPT)
 
-        self.tracker = TrackAnythingPipeline(self.mask_phrases, sam_points_per_side=50, sam_run_gap=self.sam_run_gap)
+        self.tracker = TrackAnythingPipeline(
+            self.mask_phrases,
+            sam_points_per_side=50,
+            sam_run_gap=self.sam_run_gap,
+            sam_model_type=sam_model_type,
+        )
         self.mask_expand = mask_expand
 
     def update_attributes(self, previous_attributes: set[FrameAttribute]) -> set[FrameAttribute]:
@@ -345,7 +352,14 @@ class MultiviewDepthProcessor(StreamProcessor):
                 )
 
             dav3_logger.level = 0  # Disable logging timing information
-            self.dav3_api = DepthAnything3.from_pretrained("depth-anything/DA3-GIANT")
+            from vipe.utils.weights import weights_path
+            ckpt_dir = weights_path("depth-anything-3", "DA3-GIANT")
+            if not (ckpt_dir / "config.json").is_file():
+                raise FileNotFoundError(
+                    f"Depth-Anything 3 GIANT weights missing under {ckpt_dir}. "
+                    f"Run `python scripts/eval_vipe/tools/prefetch_vipe_models.py` to download."
+                )
+            self.dav3_api = DepthAnything3.from_pretrained(str(ckpt_dir))
             self.dav3_api = self.dav3_api.cuda().eval()
 
     def update_attributes(self, previous_attributes: set[FrameAttribute]) -> set[FrameAttribute]:

@@ -24,6 +24,7 @@ except ModuleNotFoundError:
 
 from vipe.utils.cameras import CameraType
 from vipe.utils.misc import unpack_optional
+from vipe.utils.weights import weights_path
 
 from .base import DepthEstimationInput, DepthEstimationModel, DepthEstimationResult, DepthType
 
@@ -41,7 +42,13 @@ class DepthAnything3Model(DepthEstimationModel):
             )
 
         dav3_logger.level = 0  # Disable logging timing information
-        self.model = DepthAnything3.from_pretrained("depth-anything/DA3METRIC-LARGE")
+        ckpt_dir = weights_path("depth-anything-3", "DA3METRIC-LARGE")
+        if not (ckpt_dir / "config.json").is_file():
+            raise FileNotFoundError(
+                f"Depth-Anything 3 weights missing under {ckpt_dir}. "
+                f"Run `python scripts/eval_vipe/tools/prefetch_vipe_models.py` to download."
+            )
+        self.model = DepthAnything3.from_pretrained(str(ckpt_dir))
         self.model = self.model.cuda().eval()
 
     @property
