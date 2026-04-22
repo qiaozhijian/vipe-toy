@@ -494,7 +494,8 @@ class GraphBuffer:
         solver.set_marginilized("dense_disp")
 
         solver.set_retractor("intrinsics", IntrinsicsRetractor(self.camera_type))
-        solver.set_damping("intrinsics", damping=1e-6, ep=1e-6)
+        intrinsics_damping_scale = self.ba_config.get("intrinsics_damping_scale", 1.0)
+        solver.set_damping("intrinsics", damping=1e-6 * intrinsics_damping_scale, ep=1e-6 * intrinsics_damping_scale)
         if not optimize_intrinsics:
             solver.set_fixed("intrinsics")
 
