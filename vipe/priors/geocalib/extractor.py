@@ -9,7 +9,6 @@ from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
-
 from torch.nn.functional import interpolate
 
 from vipe.utils.weights import weights_path

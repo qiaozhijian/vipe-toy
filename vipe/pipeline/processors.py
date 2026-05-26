@@ -15,11 +15,13 @@
 
 
 import logging
-from typing import Iterator
+from typing import Any, Iterable, Iterator, cast
 
 import numpy as np
 import torch
+from scipy.spatial.transform import Rotation as R
 
+from vipe.ext.lietorch import SE3, SO3
 from vipe.priors.depth import DepthEstimationInput, make_depth_model
 from vipe.priors.depth.alignment import align_inv_depth_to_depth
 from vipe.priors.depth.priorda import PriorDAModel
@@ -28,9 +30,10 @@ from vipe.priors.geocalib import GeoCalib
 from vipe.priors.track_anything import TrackAnythingPipeline
 from vipe.priors.track_anything.checkpoints import SamBackbone
 from vipe.slam.interface import SLAMOutput
-from vipe.streams.base import (CachedVideoStream, FrameAttribute,
-                               StreamProcessor, VideoFrame, VideoStream)
+from vipe.streams.base import CachedVideoStream, FrameAttribute, StreamProcessor, VideoFrame, VideoStream
 from vipe.utils.cameras import CameraType
+from vipe.utils.depth import get_camera_rays
+from vipe.utils.geometry import project_points_to_panorama
 from vipe.utils.logging import pbar
 from vipe.utils.misc import unpack_optional
 from vipe.utils.morph import erode
@@ -96,12 +99,13 @@ class GeoCalibIntrinsicsProcessor(IntrinsicEstimationProcessor):
                 camera_model=camera_model,
             )
 
-        self.fov_y = res["camera"].vfov[0].item()
+        camera_result = cast(Any, res["camera"])
+        self.fov_y = camera_result.vfov[0].item()
         self.camera_type = camera_type
 
         if not is_pinhole:
             # Assign distortion parameter
-            self.distortion = [res["camera"].dist[0, 0].item()]
+            self.distortion = [camera_result.dist[0, 0].item()]
 
 
 class TrackAnythingProcessor(StreamProcessor):
@@ -173,7 +177,9 @@ class AdaptiveDepthProcessor(StreamProcessor):
         try:
             prefix, metric_model, video_model = model.split("_")
             assert video_model in ["svda", "vda"]
-            self.video_depth_model = VideoDepthAnythingDepthModel(model="vits" if video_model == "svda" else "vitl")
+            self.video_depth_model: VideoDepthAnythingDepthModel | None = VideoDepthAnythingDepthModel(
+                model="vits" if video_model == "svda" else "vitl"
+            )
 
         except ValueError:
             prefix, metric_model = model.split("_")
@@ -207,16 +213,19 @@ class AdaptiveDepthProcessor(StreamProcessor):
             frame_data_list.append(frame.cpu())
             frame_list.append(frame.rgb.cpu().numpy())
 
+        video_depth_model = unpack_optional(self.video_depth_model)
         video_depth_result: torch.Tensor = unpack_optional(
-            self.video_depth_model.estimate(DepthEstimationInput(video_frame_list=frame_list)).relative_inv_depth
+            video_depth_model.estimate(DepthEstimationInput(video_frame_list=frame_list)).relative_inv_depth
         )
         return video_depth_result, frame_data_list
 
     def update_iterator(self, previous_iterator: Iterator[VideoFrame], pass_idx: int) -> Iterator[VideoFrame]:
         # Determine the percentage score of the SLAM map.
 
-        self.cache_scale_bias = None
+        self.cache_scale_bias: tuple[torch.Tensor, torch.Tensor] | None = None
         min_uv_score: float = 1.0
+        slam_map = unpack_optional(self.slam_output.slam_map)
+        data_iterator: Iterable[VideoFrame]
 
         if self.video_depth_model is not None:
             video_depth_result, data_iterator = self._compute_video_da(previous_iterator)
@@ -233,7 +242,7 @@ class AdaptiveDepthProcessor(StreamProcessor):
                 for test_frame_idx in range(self.slam_output.trajectory.shape[0]):
                     if test_frame_idx % 10 != 0:
                         continue
-                    depth_infilled = self.slam_output.slam_map.project_map(
+                    depth_infilled = slam_map.project_map(
                         test_frame_idx,
                         0,
                         frame.size(),
@@ -256,7 +265,7 @@ class AdaptiveDepthProcessor(StreamProcessor):
                 ).metric_depth
                 frame.information = f"uv={min_uv_score:.2f}(Metric)"
             else:
-                depth_map = self.slam_output.slam_map.project_map(
+                depth_map = slam_map.project_map(
                     frame_idx,
                     0,
                     frame.size(),
@@ -283,22 +292,26 @@ class AdaptiveDepthProcessor(StreamProcessor):
                     align_mask = align_mask & frame.mask & (~frame.sky_mask)
 
                 try:
-                    _, scale, bias = align_inv_depth_to_depth(
+                    _, scale_tensor, bias_tensor = align_inv_depth_to_depth(
                         unpack_optional(video_depth_inv_depth),
                         prompt_result,
                         align_mask,
                     )
                 except RuntimeError:
-                    scale, bias = self.cache_scale_bias
+                    if self.cache_scale_bias is None:
+                        raise
+                    scale_tensor, bias_tensor = self.cache_scale_bias
 
                 # momentum update
                 if self.cache_scale_bias is None:
-                    self.cache_scale_bias = (scale, bias)
-                scale = self.cache_scale_bias[0] * self.update_momentum + scale * (1 - self.update_momentum)
-                bias = self.cache_scale_bias[1] * self.update_momentum + bias * (1 - self.update_momentum)
-                self.cache_scale_bias = (scale, bias)
+                    self.cache_scale_bias = (scale_tensor, bias_tensor)
+                scale_tensor = self.cache_scale_bias[0] * self.update_momentum + scale_tensor * (
+                    1 - self.update_momentum
+                )
+                bias_tensor = self.cache_scale_bias[1] * self.update_momentum + bias_tensor * (1 - self.update_momentum)
+                self.cache_scale_bias = (scale_tensor, bias_tensor)
 
-                video_inv_depth = video_depth_inv_depth * scale + bias
+                video_inv_depth = video_depth_inv_depth * scale_tensor + bias_tensor
                 video_inv_depth[video_inv_depth < 1e-3] = 1e-3
                 frame.metric_depth = video_inv_depth.reciprocal()
 
@@ -324,9 +337,9 @@ class MultiviewDepthProcessor(StreamProcessor):
         self,
         slam_output: SLAMOutput,
         model: str = "mvd_dav3",
-        window_size: int = 10,                  # Practically this should be as large as possible if memory permits.
+        window_size: int = 10,  # Practically this should be as large as possible if memory permits.
         overlap_size: int = 3,
-        secondary_keyframe: bool = False,       # This is found to cause jittering for some scenes due to abrupt context changes.
+        secondary_keyframe: bool = False,  # This is found to cause jittering for some scenes due to abrupt context changes.
     ):
         super().__init__()
         self.slam_output = slam_output
@@ -343,23 +356,23 @@ class MultiviewDepthProcessor(StreamProcessor):
         self.n_passes_required = 2
 
         if self.model == "mvd_dav3":
-            try:
-                from depth_anything_3.api import DepthAnything3
-                from depth_anything_3.api import logger as dav3_logger
-            except ModuleNotFoundError:
-                raise ModuleNotFoundError(
-                    "depth-anything-3 not found. Please reinstall vipe with `pip install --no-build-isolation -e .[dav3]`"
-                )
+            from vipe.priors.depth.dav3 import DepthAnything3
+            from vipe.priors.depth.dav3.utils import logger as dav3_logger
 
             dav3_logger.level = 0  # Disable logging timing information
             from vipe.utils.weights import weights_path
-            ckpt_dir = weights_path("depth-anything-3", "DA3-GIANT")
-            if not (ckpt_dir / "config.json").is_file():
-                raise FileNotFoundError(
-                    f"Depth-Anything 3 GIANT weights missing under {ckpt_dir}. "
-                    f"Run `python scripts/eval_vipe/tools/prefetch_vipe_models.py` to download."
+
+            # Prefer local weights under VIPE_WEIGHTS_ROOT / weights/depth-anything-3/DA3-GIANT/model.safetensors
+            # (vipe-toy feature for offline / centralized checkpoint management).
+            ckpt = weights_path("depth-anything-3", "DA3-GIANT", "model.safetensors")
+            if ckpt.is_file():
+                self.dav3_api = DepthAnything3.from_pretrained(
+                    "depth-anything/DA3-GIANT", model_name="da3-giant", weights_path=str(ckpt)
                 )
-            self.dav3_api = DepthAnything3.from_pretrained(str(ckpt_dir))
+            else:
+                self.dav3_api = DepthAnything3.from_pretrained(
+                    "depth-anything/DA3-GIANT", model_name="da3-giant"
+                )
             self.dav3_api = self.dav3_api.cuda().eval()
 
     def update_attributes(self, previous_attributes: set[FrameAttribute]) -> set[FrameAttribute]:
@@ -412,7 +425,9 @@ class MultiviewDepthProcessor(StreamProcessor):
                 sw_images, sw_exts, sw_ints = zip(*[frame.dav3_conditions() for frame in current_sliding_window])
 
                 if len(sw_keyframe_inds) > 0:
-                    kf_images, kf_exts, kf_ints = zip(*[self.keyframes_data[t].dav3_conditions() for t in sw_keyframe_inds])
+                    kf_images, kf_exts, kf_ints = zip(
+                        *[self.keyframes_data[t].dav3_conditions() for t in sw_keyframe_inds]
+                    )
                 else:
                     kf_images, kf_exts, kf_ints = tuple(), tuple(), tuple()
 
@@ -453,3 +468,73 @@ class MultiviewDepthProcessor(StreamProcessor):
             yield from self.estimate_depth_sliding_window(previous_iterator)
         else:
             raise ValueError(f"Invalid pass index: {pass_idx}")
+
+
+class EquirectProjectionProcessor(StreamProcessor):
+    """
+    Camera convention (with rotation = I, up of panorama is outward, Y is inward):
+       -----
+      (  Z  )
+     (   |   )
+    (    Y-X  )
+     (       )
+      (     )
+       -<|>-
+         |
+    [boundary of image]
+    """
+
+    def __init__(self, rotation: SO3, frame_size: tuple[int, int], intrinsics: torch.Tensor) -> None:
+        super().__init__()
+        self.rotation = rotation.cuda()
+        self.intrinsics = intrinsics.cuda()
+        rays = get_camera_rays(frame_size[0], frame_size[1], self.intrinsics, normalize=True)
+        rays = unpack_optional(self.rotation[None, None].act(rays))
+        uv = project_points_to_panorama(rays, return_depth=False)
+        self.uv = (uv * 2) - 1
+        self.frame_size = frame_size
+
+    @staticmethod
+    def yaw_pitch_to_rotation(yaw: float, pitch: float) -> SO3:
+        """
+        First rotate around yaw, then pitch (positive is heads up, negative is down).
+        """
+        return SO3.InitFromVec(
+            torch.from_numpy(R.from_euler("xyz", [pitch, yaw, 0], degrees=False).as_quat(canonical=True)).float()
+        )
+
+    def update_frame_size(self, previous_frame_size: tuple[int, int]):
+        return self.frame_size
+
+    def __call__(self, frame_idx: int, frame: VideoFrame) -> VideoFrame:
+        assert frame.metric_depth is None, "Metric depth is not supported for equirect projection"
+
+        if (new_pose := frame.pose) is not None:
+            rel_transform = SE3.InitFromVec(torch.cat((torch.zeros(3).cuda(), self.rotation.data)))
+            new_pose = new_pose * rel_transform
+
+        new_rgb = (
+            torch.nn.functional.grid_sample(frame.rgb.moveaxis(-1, 0)[None], self.uv[None], align_corners=True)
+            .squeeze()
+            .moveaxis(0, -1)
+        )
+
+        if (new_instance := frame.instance) is not None:
+            new_instance = torch.nn.functional.grid_sample(
+                new_instance[None, None].float(), self.uv[None], align_corners=True, mode="nearest"
+            )[0, 0]
+
+        if (new_mask := frame.mask) is not None:
+            new_mask = torch.nn.functional.grid_sample(
+                new_mask[None, None].float(), self.uv[None], align_corners=True, mode="nearest"
+            )[0, 0]
+
+        return VideoFrame(
+            raw_frame_idx=frame.raw_frame_idx,
+            rgb=new_rgb,
+            pose=new_pose,
+            intrinsics=self.intrinsics.clone(),
+            camera_type=CameraType.PINHOLE,
+            instance=new_instance,
+            mask=new_mask,
+        )

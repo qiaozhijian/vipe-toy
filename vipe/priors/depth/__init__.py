@@ -46,8 +46,12 @@ def make_depth_model(model: str):
 
     elif model_name == "dav3":
         from .dav3 import DepthAnything3Model
+        from vipe.utils.weights import weights_path
 
-        return DepthAnything3Model()
+        # vipe-toy: prefer local checkpoint if present (for offline / custom root via VIPE_WEIGHTS_ROOT)
+        local_safetensors = weights_path("depth-anything-3", "DA3METRIC-LARGE", "model.safetensors")
+        weights_arg = str(local_safetensors) if local_safetensors.is_file() else None
+        return DepthAnything3Model(weights_path=weights_arg)
 
     else:
         raise ValueError(f"Unknown depth model: {model}")

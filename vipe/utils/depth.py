@@ -13,9 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Literal, Optional, Tuple
+from typing import Literal, Optional
 
-import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -65,7 +64,7 @@ def normal_weight_from_xyz(xyz: torch.Tensor, robust: bool = True) -> torch.Tens
     if not batch_dim:
         xyz = xyz.unsqueeze(0)
 
-    from .ext import _C
+    from vipe.ext import _C
 
     assert xyz.size(0) == 1, "Batch size must be 1."
     if robust:
@@ -193,7 +192,6 @@ def bilinear_splatting(
         target_width = uv.shape[2]
 
     b, h, w, c = data.shape
-    device = data.device
 
     if weight is None:
         weight = torch.ones(size=(b, h, w)).to(data)
@@ -343,7 +341,6 @@ def reproject(
             mask1 = mask1.unsqueeze(0)
 
     b, h, w, c = frame1.shape
-    device = frame1.device
     rel_pose = (pose2.inv() * pose1).matrix()
 
     cam_rays1 = get_camera_rays(h, w, intrinsic1)
