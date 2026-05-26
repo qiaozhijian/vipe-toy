@@ -18,13 +18,14 @@ import importlib
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Iterable, Iterator, Protocol
+from typing import Any, Iterable, Iterator, Protocol, cast
 
 import numpy as np
 import torch
 from omegaconf import DictConfig
 from torch.utils.data import IterableDataset
 
+from vipe.config import BaseConfigSchema
 from vipe.ext.lietorch import SE3
 from vipe.utils.cameras import CameraType
 from vipe.utils.logging import pbar
@@ -128,7 +129,8 @@ class VideoFrame:
             raise ValueError(f"Attribute {attribute} is not available in the frame.")
 
     def cpu(self) -> "VideoFrame":
-        map_cpu = lambda x: x.cpu() if x is not None else None
+        def map_cpu(x):
+            return x.cpu() if x is not None else None
 
         return VideoFrame(
             raw_frame_idx=self.raw_frame_idx,
@@ -144,7 +146,8 @@ class VideoFrame:
         )
 
     def cuda(self) -> "VideoFrame":
-        map_cuda = lambda x: x.cuda() if x is not None else None
+        def map_cuda(x):
+            return x.cuda() if x is not None else None
 
         return VideoFrame(
             raw_frame_idx=self.raw_frame_idx,
@@ -305,6 +308,9 @@ class VideoStream(IterableDataset[VideoFrame]):
             stream_attribute.append(frame.get_attribute(attribute))
         return stream_attribute
 
+    def get_gt_stream_attribute(self, attribute: FrameAttribute) -> list[Any]:
+        raise NotImplementedError(f"{type(self).__name__} does not provide ground-truth {attribute.value} data.")
+
 
 class MultiviewVideoList(Iterable[VideoStream]):
     """
@@ -356,7 +362,7 @@ class CachedVideoStream(VideoStream):
         self._name = video_stream.name()
         self._attributes = video_stream.attributes()
         self._len = len(video_stream)
-        self.iterator = iter(video_stream)
+        self.iterator: Iterator[VideoFrame] | None = iter(video_stream)
         self.data: list[VideoFrame] = []
         self.desc = desc
 
@@ -513,12 +519,14 @@ class ProcessedVideoStream(VideoStream):
 
 class StreamList:
     @staticmethod
-    def make(config: DictConfig) -> "StreamList":
+    def make(config: DictConfig | BaseConfigSchema) -> "StreamList":
+        if isinstance(config, BaseConfigSchema):
+            config = config.to_dictconfig()
         module_path, class_name = config.instance.rsplit(".", 1)
         module = importlib.import_module(module_path)
         config = copy.deepcopy(config)
         del config.instance
-        return getattr(module, class_name)(**config)
+        return getattr(module, class_name)(**cast(dict[str, Any], config))
 
     def __len__(self) -> int:
         raise NotImplementedError

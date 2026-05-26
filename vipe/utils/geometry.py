@@ -20,7 +20,6 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 import torch.optim as optim
-
 from pycg.isometry import Isometry, Quaternion
 
 from vipe.ext.lietorch import SE3, SO3, LieGroupParameter, Sim3
@@ -371,7 +370,7 @@ def se3_to_isometry(se3: SE3) -> list[Isometry] | Isometry:
     return isometries if batch_dim else isometries[0]
 
 
-def so3_to_se3(so3: SE3) -> SE3:
+def so3_to_se3(so3: SO3) -> SE3:
     """Converts a single SO3 Lie group element to a SE3 Lie group element.
 
     Args:
@@ -384,7 +383,7 @@ def so3_to_se3(so3: SE3) -> SE3:
     return SE3.InitFromVec(torch.cat((t_component, so3.vec()), dim=-1))
 
 
-def se3_to_so3(se3: SE3) -> SE3:
+def se3_to_so3(se3: SE3) -> SO3:
     """Converts a single SE3 Lie group element to a SO3 Lie group element.
 
     Args:
@@ -393,10 +392,10 @@ def se3_to_so3(se3: SE3) -> SE3:
     Returns:
         single / batch of SO3 Lie group elements [] / [bs]
     """
-    return SE3.InitFromVec(se3.vec()[..., 3:])
+    return SO3.InitFromVec(se3.vec()[..., 3:])
 
 
-def so3_average(so3: SE3, dim: int) -> SE3:
+def so3_average(so3: SO3, dim: int) -> SO3:
     """Computes the Chordal L2 average of the SO3 matrices, where the Isometry distance
     is defined as squared of chordal distance (Frobenius form).
     For other distance like geodesic distance or other norms like L1-norm, no closed-form is provided.
@@ -406,7 +405,7 @@ def so3_average(so3: SE3, dim: int) -> SE3:
     q: torch.Tensor = so3.vec()
     q_mean_mat = (q.unsqueeze(-1) * q.unsqueeze(-2)).mean(dim=dim)
     q_mean = torch.linalg.eigh(q_mean_mat).eigenvectors[..., -1]
-    return SE3.InitFromVec(q_mean)
+    return SO3.InitFromVec(q_mean)
 
 
 def se3_average(se3: SE3, dim: int) -> SE3:
@@ -432,10 +431,10 @@ class ScaledTransform:
     def apply_se3(self, se3: SE3) -> SE3:
         """Applies the similarity transform to an SE3 transformation."""
         se3_vec = se3.vec()
-        target_t, target_quat = se3_vec[:, :3], SE3.InitFromVec(se3_vec[:, 3:])
+        target_t, target_pose = se3_vec[:, :3], SE3.InitFromVec(se3_vec[:, 3:])
         target_t = self.scale * self.rotation[None].act(target_t) + self.translation[None]
-        target_quat: SE3 = self.rotation[None] * target_quat
-        return SE3.InitFromVec(torch.cat((target_t, target_quat.vec()), dim=-1))
+        transformed_pose = self.rotation[None] * target_pose
+        return SE3.InitFromVec(torch.cat((target_t, transformed_pose.vec()), dim=-1))
 
     def apply_points(self, points: torch.Tensor) -> torch.Tensor:
         """Applies the similarity transform to a set of 3D poinqts."""

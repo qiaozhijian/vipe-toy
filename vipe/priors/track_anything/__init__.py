@@ -19,6 +19,7 @@ class TrackAnythingPipeline:
         sam_run_gap: int = 10,
         sam_model_type: SamBackbone = "vit_b",
     ) -> None:
+<<<<<<< HEAD
         sam_ckpt_path = ensure_sam_checkpoint(sam_model_type)
         aot_ckpt_path = ensure_deaot_checkpoint()
 

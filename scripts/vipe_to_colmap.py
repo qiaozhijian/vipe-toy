@@ -2,7 +2,6 @@
 
 import argparse
 import logging
-
 from pathlib import Path
 from typing import Tuple
 
@@ -10,7 +9,6 @@ import cv2
 import imageio
 import numpy as np
 import torch
-
 from scipy.spatial.transform import Rotation
 
 from vipe.slam.interface import SLAMMap
@@ -23,7 +21,6 @@ from vipe.utils.io import (
     read_pose_artifacts,
     read_rgb_artifacts,
 )
-
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -152,7 +149,9 @@ def write_points3d_txt_from_depth(
         if idx % depth_step != 0:
             continue
 
-        rgb = cv2.cvtColor(cv2.imread(str(images[idx]), cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+        image = cv2.imread(str(images[idx]), cv2.IMREAD_COLOR)
+        assert image is not None, f"Failed to read image: {images[idx]}"
+        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         frame_height, frame_width = rgb.shape[:2]
         rgb = rgb[::spatial_subsample, ::spatial_subsample]
 

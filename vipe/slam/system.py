@@ -25,8 +25,7 @@ from vipe.ext.lietorch import SE3
 from vipe.priors.depth import make_depth_model
 from vipe.priors.depth.adapter import PinholeDepthAdapter
 from vipe.priors.depth.base import DepthType
-from vipe.streams.base import (FrameAttribute, ProcessedVideoStream,
-                               StreamProcessor, VideoFrame, VideoStream)
+from vipe.streams.base import FrameAttribute, ProcessedVideoStream, StreamProcessor, VideoFrame, VideoStream
 from vipe.utils.cameras import CameraType
 from vipe.utils.logging import pbar
 from vipe.utils.misc import unpack_optional
@@ -171,7 +170,7 @@ class SLAMSystem:
         trajectory = filled_return.poses.inv()
         for frame_idx, frame_data_list in enumerate(zip(*video_streams)):
             pose_mat = trajectory[frame_idx].matrix().cpu().numpy()
-            rr.set_time_sequence("frame", frame_idx)
+            rr.set_time("frame", sequence=frame_idx)
             for view_idx in range(len(frame_data_list)):
                 rig_mat = pose_mat @ SE3(self.buffer.rig[view_idx]).matrix().cpu().numpy()
                 image = frame_data_list[view_idx].rgb.cpu().numpy()

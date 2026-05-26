@@ -20,7 +20,6 @@ import cv2
 import imageio
 import numpy as np
 import torch
-
 from PIL import Image, ImageDraw, ImageFont
 from pycg import image
 
@@ -31,15 +30,15 @@ from vipe.utils.cameras import CameraType
 from vipe.utils.logging import pbar
 from vipe.utils.misc import unpack_optional
 
-from .geometry import project_points_to_panorama, project_points_to_pinhole
-
+from .geometry import project_points_to_panorama
 
 rng = np.random.RandomState(200)
 _palette = ((rng.random((3 * 255)) * 0.7 + 0.3) * 255).astype(np.uint8).tolist()
 _palette = [0, 0, 0] + _palette
 
-POINTS_STENCIL = np.meshgrid(np.arange(-2, 3), np.arange(-2, 3))
-POINTS_STENCIL = np.stack(POINTS_STENCIL, axis=-1).reshape(-1, 2)
+POINTS_STENCIL: np.ndarray
+points_stencil_grid = np.meshgrid(np.arange(-2, 3), np.arange(-2, 3))
+POINTS_STENCIL = np.stack(points_stencil_grid, axis=-1).reshape(-1, 2)
 POINTS_STENCIL = POINTS_STENCIL[np.max(np.abs(POINTS_STENCIL), axis=-1) > 1]
 POINTS_STENCIL = np.pad(POINTS_STENCIL, ((0, 1), (0, 0)), constant_values=0)
 
@@ -86,19 +85,21 @@ def bbox_with_size(pcd_xyz: torch.Tensor, quantile: float = 0.98):
     low_quantile, high_quantile = (1 - quantile) / 2, 1 - (1 - quantile) / 2
     pcd_min = torch.quantile(pcd_xyz, low_quantile, dim=0, keepdim=True)
     pcd_max = torch.quantile(pcd_xyz, high_quantile, dim=0, keepdim=True)
+    pcd_min_vec = pcd_min[0]
+    pcd_max_vec = pcd_max[0]
 
-    x_length = pcd_max[0, 0] - pcd_min[0, 0]
-    x_length_pos = pcd_min[0] + torch.tensor([x_length / 2, 0, 0])
-    y_length = pcd_max[0, 1] - pcd_min[0, 1]
-    y_length_pos = pcd_min[0] + torch.tensor([0, y_length / 2, 0])
-    z_length = pcd_max[0, 2] - pcd_min[0, 2]
-    z_length_pos = pcd_min[0] + torch.tensor([0, 0, z_length / 2])
+    x_length = pcd_max_vec[0] - pcd_min_vec[0]
+    x_length_pos = pcd_min_vec + pcd_min_vec.new_tensor([x_length.item() / 2, 0.0, 0.0])
+    y_length = pcd_max_vec[1] - pcd_min_vec[1]
+    y_length_pos = pcd_min_vec + pcd_min_vec.new_tensor([0.0, y_length.item() / 2, 0.0])
+    z_length = pcd_max_vec[2] - pcd_min_vec[2]
+    z_length_pos = pcd_min_vec + pcd_min_vec.new_tensor([0.0, 0.0, z_length.item() / 2])
 
     return [
-        vis.wireframe_bbox(pcd_min, pcd_max, ucid=-1),
-        vis.text(f"{x_length.item():.2f}m", x_length_pos),
-        vis.text(f"{y_length.item():.2f}m", y_length_pos),
-        vis.text(f"{z_length.item():.2f}m", z_length_pos),
+        vis.wireframe_bbox(pcd_min_vec.detach().cpu().numpy(), pcd_max_vec.detach().cpu().numpy(), ucid=-1),
+        vis.text(f"{x_length.item():.2f}m", x_length_pos.detach().cpu().numpy()),
+        vis.text(f"{y_length.item():.2f}m", y_length_pos.detach().cpu().numpy()),
+        vis.text(f"{z_length.item():.2f}m", z_length_pos.detach().cpu().numpy()),
     ]
 
 
@@ -159,7 +160,7 @@ def draw_lines_batch(
     lines = np.stack([lines_start, lines_end], axis=1).astype(int)
     return cv2.polylines(
         canvas.copy(),
-        [l for l in lines],
+        [line for line in lines],
         isClosed=False,
         color=color or (0, 255, 0),
         thickness=1,
@@ -174,14 +175,14 @@ def draw_tracks(canvas: np.ndarray, tracks: np.ndarray, valid: np.ndarray):
             To draw tracks of different lengths, please call this function multiple times.
         valid: The validity of the tracks. (length, n_tracks)
     """
-    for l in range(tracks.shape[0]):
-        uv, uv_valid = tracks[l], valid[l]
-        canvas = draw_points_batch(canvas, uv[uv_valid], (0, 255 - 20 * l, 0), stencil=POINTS_STENCIL)
-    for l in range(tracks.shape[0] - 1):
-        uv_start, start_valid = tracks[l], valid[l]
-        uv_end, end_valid = tracks[l + 1], valid[l + 1]
+    for track_idx in range(tracks.shape[0]):
+        uv, uv_valid = tracks[track_idx], valid[track_idx]
+        canvas = draw_points_batch(canvas, uv[uv_valid], (0, 255 - 20 * track_idx, 0), stencil=POINTS_STENCIL)
+    for segment_idx in range(tracks.shape[0] - 1):
+        uv_start, start_valid = tracks[segment_idx], valid[segment_idx]
+        uv_end, end_valid = tracks[segment_idx + 1], valid[segment_idx + 1]
         all_valid = start_valid & end_valid
-        canvas = draw_lines_batch(canvas, uv_start[all_valid], uv_end[all_valid], (0, 255 - 20 * l, 0))
+        canvas = draw_lines_batch(canvas, uv_start[all_valid], uv_end[all_valid], (0, 255 - 20 * segment_idx, 0))
     return canvas
 
 
@@ -198,10 +199,10 @@ def project_points_panorama(
     pose_matrix = pose.inv().matrix().cpu().numpy()
     local_xyz = xyz @ pose_matrix[:3, :3].T + pose_matrix[:3, 3]
 
-    uv = project_points_to_panorama(torch.from_numpy(local_xyz), return_depth=False)
-    uv[:, 0] *= frame_size[1]
-    uv[:, 1] *= frame_size[0]
-    uv = (uv - 0.5).round().int().cpu().numpy()
+    uv_tensor = project_points_to_panorama(torch.from_numpy(local_xyz), return_depth=False)
+    uv_tensor[:, 0] *= frame_size[1]
+    uv_tensor[:, 1] *= frame_size[0]
+    uv = (uv_tensor - 0.5).round().int().cpu().numpy()
 
     if color is not None:
         if np.issubdtype(color.dtype, np.floating):
@@ -237,7 +238,7 @@ def project_points(
         & torch.from_numpy(local_xyz[:, 2] > 0)
     )
     uv = uv[in_bound]
-    uv = (uv - 0.5).round().int().cpu().numpy()
+    uv_np = (uv - 0.5).round().int().cpu().numpy()
 
     # uv, in_bound = project_points_to_pinhole(
     #     torch.from_numpy(local_xyz),
@@ -251,11 +252,11 @@ def project_points(
     # uv = (uv - 0.5).round().int().cpu().numpy()
 
     if color is not None:
-        color = color[in_bound]
+        color = color[in_bound.cpu().numpy()]
         if np.issubdtype(color.dtype, np.floating):
             color = (color * 255).astype(np.uint8)
 
-    return draw_points_batch(canvas, uv, color, stencil=POINTS_STENCIL)
+    return draw_points_batch(canvas, uv_np, color, stencil=POINTS_STENCIL)
 
 
 def image_above_text(img: np.ndarray, text: str = "<TEXT>") -> Image.Image:
@@ -273,7 +274,9 @@ def image_above_text(img: np.ndarray, text: str = "<TEXT>") -> Image.Image:
     draw = ImageDraw.Draw(new_image)
 
     try:
-        font = ImageFont.truetype("arial.ttf", text_height)  # You can change the font size
+        font: ImageFont.ImageFont | ImageFont.FreeTypeFont = ImageFont.truetype(
+            "arial.ttf", text_height
+        )  # You can change the font size
     except IOError:
         font = ImageFont.load_default()  # Fallback to default font if arial is not available
 
@@ -463,7 +466,7 @@ def save_projection_video(
     ]
     with VideoWriter(video_path, video_stream.fps()) as vw:
         trajectory_length = 0.0
-        last_pose = video_stream[0].pose
+        last_pose = unpack_optional(video_stream[0].pose)
         for frame_idx, frame_data in pbar(enumerate(video_stream), total=len(video_stream), desc="Writing viz video"):
             img_rows = []
             for img_iterator in img_iterators:
@@ -480,8 +483,8 @@ def save_projection_video(
                     fov_y = 2 * np.arctan(frame_data.size()[0] / (2 * focal))
                     fov_y = np.rad2deg(fov_y)
                     text_desc += f" | fovY {fov_y:.2f}"
-            current_pose = frame_data.pose
-            trajectory_length += np.linalg.norm((last_pose.inv() * current_pose).translation()[:3].cpu().numpy())
+            current_pose = unpack_optional(frame_data.pose)
+            trajectory_length += float(np.linalg.norm((last_pose.inv() * current_pose).translation()[:3].cpu().numpy()))
             last_pose = current_pose
             text_desc += f" | Traj {trajectory_length:.4f}"
             if len(frame_data.information) > 0:
