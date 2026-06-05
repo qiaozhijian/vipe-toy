@@ -107,6 +107,8 @@ Initialization options for the default pinhole and wide-angle pipelines.
 | `camera_type` | `pinhole` \| `panorama` \| `simple_divisional` \| `mei` | required | choices `pinhole` \| `panorama` \| `simple_divisional` \| `mei` | Camera model used by SLAM and projection code. Use mei for wide-angle/fisheye input. |
 | `intrinsics` | `geocalib` \| `gt` | required | choices `geocalib` \| `gt` | Source of camera intrinsics. geocalib estimates intrinsics; gt expects each frame to provide them. |
 | `instance` | InstanceInitConfig \| null | required | - | Instance-segmentation initialization. Set to null to skip instance masks. |
+| `async_prefetch` | bool | `true` | - | Prefetch initialized frames asynchronously before SLAM. Set false to use serialized caching. |
+| `prefetch_queue_size` | int | `16` | >= 1 | Maximum number of initialized frames the async producer may keep ready ahead of SLAM. |
 
 ### PanoramaInitConfig
 
@@ -220,7 +222,7 @@ Bundle-adjustment solver and robust loss options.
 | Field | Type | Default | Constraints | Description |
 | --- | --- | --- | --- | --- |
 | `dense_disp_alpha` | float | required | >= 0.0 | Weight for dense-disparity regularization during bundle adjustment. |
-| `fused` | bool | required | - | Use the fused CUDA bundle-adjustment path; unsupported layouts raise an error. |
+| `fused` | bool \| `auto` | required | - | Use the fused CUDA bundle-adjustment path. "auto" enables it automatically when the pipeline layout is compatible (single-view pinhole, no robust kernel, no rig-rotation optimization, no sparse tracks) and falls back to the generic solver otherwise; an explicit true forces the fused path and raises on unsupported layouts. |
 | `intrinsics_damping_scale` | float | required | > 0.0 | Multiplier for damping applied to optimized camera intrinsics. |
 | `robust_kernel` | `huber` \| `tukey` \| `gnc_tls` \| null | required | - | Robust loss for dense-flow residuals. Set to null for L2 residuals. |
 | `robust_kernel_threshold` | float | required | > 0.0 | Robust-kernel threshold in 1/8-resolution feature-map pixels. |

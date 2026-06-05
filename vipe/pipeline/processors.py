@@ -36,6 +36,7 @@ from vipe.utils.depth import get_camera_rays
 from vipe.utils.geometry import project_points_to_panorama
 from vipe.utils.logging import pbar
 from vipe.utils.misc import unpack_optional
+from vipe.utils.model_cache import ModelCache
 from vipe.utils.morph import erode
 
 logger = logging.getLogger(__name__)
@@ -73,13 +74,22 @@ class GeoCalibIntrinsicsProcessor(IntrinsicEstimationProcessor):
         video_stream: VideoStream,
         gap_sec: float = 1.0,
         camera_type: CameraType = CameraType.PINHOLE,
+        model_cache: ModelCache | None = None,
     ) -> None:
         super().__init__(video_stream, gap_sec)
 
         is_pinhole = camera_type == CameraType.PINHOLE
         weights = "pinhole" if is_pinhole else "distorted"
 
-        model = GeoCalib(weights=weights).cuda()
+        # GeoCalib is used purely for inference; when a cache is provided the
+        # weights are loaded once and reused across streams instead of per video.
+        def _build_geocalib():
+            return GeoCalib(weights=weights).cuda()
+
+        if model_cache is not None:
+            model = model_cache.get(f"geocalib/{weights}", _build_geocalib)
+        else:
+            model = _build_geocalib()
         indexable_stream = CachedVideoStream(video_stream)
 
         if is_pinhole:
@@ -120,8 +130,10 @@ class TrackAnythingProcessor(StreamProcessor):
         sam_run_gap: int = 30,
         mask_expand: int = 5,
         sam_model_type: SamBackbone = "vit_b",
+        model_cache: ModelCache | None = None,
     ) -> None:
-        self.mask_phrases = mask_phrases
+        # Defensive copy: prevent mutation of caller's list
+        self.mask_phrases = list(mask_phrases)
         self.sam_run_gap = sam_run_gap
         self.add_sky = add_sky
 
@@ -133,6 +145,7 @@ class TrackAnythingProcessor(StreamProcessor):
             sam_points_per_side=50,
             sam_run_gap=self.sam_run_gap,
             sam_model_type=sam_model_type,
+            model_cache=model_cache,
         )
         self.mask_expand = mask_expand
 

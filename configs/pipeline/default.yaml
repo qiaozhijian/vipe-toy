@@ -7,6 +7,8 @@ instance: vipe.pipeline.default.DefaultAnnotationPipeline
 init:
   camera_type: "pinhole"
   intrinsics: "geocalib"
+  async_prefetch: true
+  prefetch_queue_size: 16
   instance:
     sam_model_type: vit_b   # vit_b | vit_l | vit_h (SAM backbone; checkpoints auto-download)
     kf_gap_sec: 2.0

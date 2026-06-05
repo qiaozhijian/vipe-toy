@@ -29,6 +29,7 @@ from vipe.streams.base import FrameAttribute, ProcessedVideoStream, StreamProces
 from vipe.utils.cameras import CameraType
 from vipe.utils.logging import pbar
 from vipe.utils.misc import unpack_optional
+from vipe.utils.model_cache import ModelCache
 
 from .components.backend import SLAMBackend
 from .components.buffer import GraphBuffer
@@ -37,7 +38,7 @@ from .components.inner_filler import FilledReturn, InnerFiller
 from .components.motion_filter import MotionFilter
 from .components.sparse_tracks import build_sparse_tracks
 from .interface import SLAMOutput
-from .networks.droid_net import DroidNet
+from .networks.droid_net import get_droid_net
 
 
 class StandardResizeStreamProcessor(StreamProcessor):
@@ -81,14 +82,15 @@ class StandardResizeStreamProcessor(StreamProcessor):
 class SLAMSystem:
     """Solver-defined SLAM"""
 
-    def __init__(self, device: torch.device, config: DictConfig) -> None:
+    def __init__(self, device: torch.device, config: DictConfig, model_cache: ModelCache | None = None) -> None:
         self.device = device
         self.visualize = config.visualize
         self.config = config.copy()
+        self.model_cache = model_cache
         OmegaConf.set_struct(self.config, False)
 
     def _build_components(self):
-        self.droid_net = DroidNet().to(self.device)
+        self.droid_net = get_droid_net(self.device, self.model_cache)
         self.sparse_tracks = build_sparse_tracks(self.config.sparse_tracks, self.config.n_views)
         self.buffer = GraphBuffer(
             height=self.config.height,
@@ -118,7 +120,16 @@ class SLAMSystem:
             Adding more views requires adding factors to the graph to keep the null-space. 
             This is currently not supported for now."""
 
-            self.metric_depth = make_depth_model(self.config.keyframe_depth)
+            # The keyframe depth model is inference-only; when a cache is
+            # provided the weights are loaded once and reused across streams.
+            # The (cheap) PinholeDepthAdapter wrapper is still applied per stream.
+            keyframe_depth = self.config.keyframe_depth
+            if self.model_cache is not None:
+                self.metric_depth = self.model_cache.get(
+                    f"depth/{keyframe_depth}", lambda: make_depth_model(keyframe_depth)
+                )
+            else:
+                self.metric_depth = make_depth_model(keyframe_depth)
             if self.config.camera_type not in self.metric_depth.supported_camera_types:
                 self.metric_depth = PinholeDepthAdapter(self.metric_depth)
 

@@ -66,7 +66,9 @@ class DefaultAnnotationPipeline(Pipeline):
         assert FrameAttribute.METRIC_DEPTH not in video_stream.attributes()
         assert FrameAttribute.INSTANCE not in video_stream.attributes()
 
-        init_processors.append(GeoCalibIntrinsicsProcessor(video_stream, camera_type=self.camera_type))
+        init_processors.append(
+            GeoCalibIntrinsicsProcessor(video_stream, camera_type=self.camera_type, model_cache=self.model_cache)
+        )
         if self.init_cfg.instance is not None:
             sam_mt = OmegaConf.select(self.init_cfg.instance, "sam_model_type", default="vit_b")
             init_processors.append(
@@ -75,6 +77,7 @@ class DefaultAnnotationPipeline(Pipeline):
                     add_sky=self.init_cfg.instance.add_sky,
                     sam_run_gap=int(video_stream.fps() * self.init_cfg.instance.kf_gap_sec),
                     sam_model_type=sam_mt,
+                    model_cache=self.model_cache,
                 )
             )
         return ProcessedVideoStream(video_stream, init_processors)
@@ -115,11 +118,19 @@ class DefaultAnnotationPipeline(Pipeline):
             logger.info(f"{video_data.name()} has been proccessed already, skip it!!")
             return annotate_output
 
+        async_prefetch = self.init_cfg.async_prefetch
+        prefetch_queue_size = self.init_cfg.prefetch_queue_size
         slam_streams: list[VideoStream] = [
-            self._add_init_processors(video_stream).cache("process", online=True) for video_stream in video_streams
+            self._add_init_processors(video_stream).cache(
+                "process",
+                online=True,
+                async_prefetch=async_prefetch,
+                prefetch_queue_size=prefetch_queue_size,
+            )
+            for video_stream in video_streams
         ]
 
-        slam_pipeline = SLAMSystem(device=torch.device("cuda"), config=self.slam_cfg)
+        slam_pipeline = SLAMSystem(device=torch.device("cuda"), config=self.slam_cfg, model_cache=self.model_cache)
         slam_output = slam_pipeline.run(slam_streams, rig=slam_rig, camera_type=self.camera_type)
 
         if self.return_payload:

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
+from pydantic import model_validator
+
 from vipe.config.base_schema import BaseConfigSchema, Field
 from vipe.config.slam import SLAMConfig
 
@@ -38,6 +40,15 @@ class DefaultInitConfig(BaseConfigSchema):
     )
     instance: InstanceInitConfig | None = Field(
         description="Instance-segmentation initialization. Set to null to skip instance masks."
+    )
+    async_prefetch: bool = Field(
+        default=True,
+        description="Prefetch initialized frames asynchronously before SLAM. Set false to use serialized caching.",
+    )
+    prefetch_queue_size: int = Field(
+        default=16,
+        ge=1,
+        description="Maximum number of initialized frames the async producer may keep ready ahead of SLAM.",
     )
 
 
@@ -102,6 +113,16 @@ class DefaultPipelineConfig(BaseConfigSchema):
     post: PostConfig = Field(description="Depth alignment and post-processing configuration.")
     output: OutputConfig = Field(description="Output artifact and visualization configuration.")
 
+    @model_validator(mode="after")
+    def normalize_fused_ba(self) -> DefaultPipelineConfig:
+        # Monocular pipeline: always single-view; the fused kernel additionally needs a
+        # pinhole camera model.
+        self.slam.ba.fused = self.slam.resolve_fused(
+            single_view=True,
+            pinhole=self.init.camera_type == "pinhole",
+        )
+        return self
+
 
 class PanoramaPipelineConfig(BaseConfigSchema):
     """Annotation pipeline for 360-degree panorama videos."""
@@ -114,6 +135,18 @@ class PanoramaPipelineConfig(BaseConfigSchema):
     slam: SLAMConfig = Field(description="SLAM and bundle-adjustment configuration for virtual views.")
     output: OutputConfig = Field(description="Output artifact and visualization configuration.")
     post: PostConfig = Field(description="Panorama depth estimation and post-processing configuration.")
+
+    @model_validator(mode="after")
+    def normalize_fused_ba(self) -> PanoramaPipelineConfig:
+        # Virtual views are pinhole, but multiple oriented views form a non-identity rig
+        # that the fused kernel cannot handle; only the degenerate single-view panorama
+        # (one centered, identity-rig view) is fused-eligible.
+        n_views = self.virtual.num_views + int(self.virtual.top) + int(self.virtual.bottom)
+        self.slam.ba.fused = self.slam.resolve_fused(
+            single_view=n_views == 1,
+            pinhole=True,
+        )
+        return self
 
 
 PipelineConfig = Annotated[DefaultPipelineConfig | PanoramaPipelineConfig, Field(discriminator="instance")]
